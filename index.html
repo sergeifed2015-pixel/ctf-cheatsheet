@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CTF — Командный справочник</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <button class="menu-btn" id="menu-btn" aria-label="Меню">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <button class="brand" id="brand" type="button" style="border:none;background:transparent;width:100%;cursor:pointer">
+        <span class="brand-mark">&gt;_</span>
+        <span class="brand-text">
+          <span class="brand-title">CTF Cheat Sheet</span>
+          <span class="brand-sub">console reference</span>
+        </span>
+      </button>
+
+      <div class="search-wrap">
+        <div class="search">
+          <svg class="search-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="search-input" placeholder="Поиск команд…" autocomplete="off" spellcheck="false">
+          <span class="kbd">/</span>
+          <button class="clear" id="search-clear" aria-label="Очистить">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+          </button>
+        </div>
+      </div>
+
+      <nav class="nav-scroll" id="nav-list"></nav>
+
+      <div class="sidebar-foot">
+        <div class="theme-toggle">
+          <button data-theme="dark" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            Тёмная
+          </button>
+          <button data-theme="light" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+            Светлая
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main content -->
+    <main class="content">
+      <div class="content-inner" id="content-inner"></div>
+    </main>
+
+    <!-- TOC -->
+    <aside class="toc" id="toc">
+      <div class="toc-title">На этой странице</div>
+      <ul class="toc-list" id="toc-list"></ul>
+    </aside>
+
+    <div class="scrim" id="scrim"></div>
+  </div>
+
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Tool info popover -->
+  <div class="tool-popover hidden" id="tool-popover" role="tooltip">
+    <div class="tool-popover-name" id="tool-popover-name"></div>
+    <div class="tool-popover-desc" id="tool-popover-desc"></div>
+    <a class="tool-popover-link" id="tool-popover-link" target="_blank" rel="noopener noreferrer">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      Скачать / открыть
+    </a>
+  </div>
+
+  <!-- Add command modal -->
+  <div class="modal-overlay hidden" id="modal-overlay">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-header">
+        <span class="modal-title" id="modal-title">Добавить команду</span>
+        <button class="modal-close" id="modal-close" aria-label="Закрыть">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+        </button>
+      </div>
+      <div class="modal-body" id="modal-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label" for="f-tool">Название инструмента *</label>
+            <input class="form-input" id="f-tool" type="text" placeholder="nmap, python3, curl…" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="f-category">Категория *</label>
+            <select class="form-select" id="f-category"></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="f-desc">Описание *</label>
+          <input class="form-input" id="f-desc" type="text" placeholder="Что делает команда и зачем её использовать" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="f-command">Команда * <span>(shell)</span></label>
+          <textarea class="form-textarea" id="f-command" placeholder="nmap -sV -p- [хост]"></textarea>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Частота использования</label>
+          <div class="freq-radio-group">
+            <label class="freq-radio"><input type="radio" name="f-freq" value="high"><span class="dot"></span>Часто</label>
+            <label class="freq-radio"><input type="radio" name="f-freq" value="medium" checked><span class="dot"></span>Иногда</label>
+            <label class="freq-radio"><input type="radio" name="f-freq" value="low"><span class="dot"></span>Редко</label>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Разбор аргументов <span>(необязательно)</span></label>
+          <div class="explain-rows" id="explain-rows"></div>
+          <button class="btn-add-row" id="btn-add-explain" type="button">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Добавить аргумент
+          </button>
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="f-output">Пример вывода <span>(необязательно)</span></label>
+          <textarea class="form-textarea" id="f-output" placeholder="user@box:~$ команда&#10;вывод…" style="min-height:70px"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-cancel" id="modal-cancel">Отмена</button>
+        <button class="btn-primary" id="modal-save">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px"><polyline points="20 6 9 17 4 12"/></svg>
+          Сохранить
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script src="analyzer.js"></script>
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
