@@ -3,13 +3,14 @@
    ============================================================ */
 
 const state = {
-  view: "home",   // home|category|search|tools|payloads|notes|reference|favorites
+  view: "home",   // home|category|search|tools|payloads|notes|reference|favorites|httpclient
   category: null,
   payloadCat: null,
   refTab: "ports",
+  httpTab: "request", // request | fuzzer
   query: "",
   freq: "all",
-  target: "",     // current scan target — substituted into commands
+  target: "",
 };
 
 const freqLabel = { high: "Часто", medium: "Иногда", low: "Редко" };
@@ -176,6 +177,10 @@ function renderNav() {
     <button class="nav-item ${state.view==="notes"?"active":""}" data-action="notes">
       <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></span>
       <span class="nav-name">Заметки</span>
+    </button>
+    <button class="nav-item ${state.view==="httpclient"?"active":""}" data-action="httpclient">
+      <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+      <span class="nav-name">HTTP Клиент</span>
     </button>`;
   navList.innerHTML = html;
   navList.querySelectorAll(".nav-item").forEach(btn => {
@@ -186,9 +191,10 @@ function renderNav() {
       else if (a==="cat") openCategory(btn.dataset.cat);
       else if (a==="tools")     openTools();
       else if (a==="payloads")  openPayloads();
-      else if (a==="notes")     openNotes();
-      else if (a==="reference") openReference();
-      else if (a==="favorites") openFavorites();
+      else if (a==="notes")      openNotes();
+      else if (a==="reference")  openReference();
+      else if (a==="favorites")  openFavorites();
+      else if (a==="httpclient") openHttpClient();
     });
   });
 }
@@ -515,14 +521,20 @@ function openCategory(id) {
 function render() {
   hideToolPopover();
   renderNav();
-  if      (state.view==="search")    renderSearch();
-  else if (state.view==="category")  renderCategory();
-  else if (state.view==="tools")     renderTools();
-  else if (state.view==="payloads")  renderPayloads();
-  else if (state.view==="notes")     renderNotes();
-  else if (state.view==="reference") renderReference();
-  else if (state.view==="favorites") renderFavorites();
+  if      (state.view==="search")     renderSearch();
+  else if (state.view==="category")   renderCategory();
+  else if (state.view==="tools")      renderTools();
+  else if (state.view==="payloads")   renderPayloads();
+  else if (state.view==="notes")      renderNotes();
+  else if (state.view==="reference")  renderReference();
+  else if (state.view==="favorites")  renderFavorites();
+  else if (state.view==="httpclient") renderHttpClient();
   else renderHome();
+}
+function openHttpClient() {
+  state.view="httpclient"; state.category=null; state.query="";
+  searchEl.value=""; clearEl.style.display="none";
+  render(); scrollTop();
 }
 function openTools() {
   state.view="tools"; state.category=null; state.query=""; state.freq="all";
@@ -674,6 +686,411 @@ function saveCustomCommand() {
   closeModal();
   openCategory(categoryId);
   toast(`Команда «${tool}» добавлена`);
+}
+
+/* ============================================================
+   HTTP Client + Directory Fuzzer
+   ============================================================ */
+const FUZZ_BUILTIN = [
+  "admin","login","dashboard","panel","console","portal","manager","management",
+  "wp-admin","wp-login.php","wp-config.php","xmlrpc.php","wp-json",
+  "administrator","adminpanel","admin.php","login.php","signin",
+  "api","api/v1","api/v2","api/v3","v1","v2","graphql","graphiql","swagger","swagger-ui",
+  "api-docs","docs","documentation","openapi.json","swagger.json",
+  "config","configuration","conf","settings","setup","install","setup.php","install.php",
+  "backup","backups","bak","old","archive","db_backup","sql","dump",
+  "test","testing","debug","dev","development","staging","demo","sandbox",
+  "upload","uploads","files","file","attachments","media","content","data",
+  "static","assets","public","resources","images","img","photos","js","css","fonts",
+  "src","source","app","includes","include","inc","lib","libs","vendor","node_modules",
+  "private","secret","hidden","internal","restricted",
+  "robots.txt","sitemap.xml",".htaccess","web.config","crossdomain.xml","security.txt",
+  ".env",".env.local",".env.production",".git",".git/config",".git/HEAD",".svn",
+  "phpinfo.php","info.php","server-status","server-info","status","health","ping",
+  "README.md","readme.txt","CHANGELOG.md","LICENSE","package.json","composer.json",
+  "user","users","account","accounts","profile","register","signup","reset","forgot",
+  "search","download","downloads","export","import",
+  "phpmyadmin","pma","adminer","dbadmin","mysqladmin",
+  "logs","log","error.log","access.log","debug.log",
+  "cgi-bin","scripts","bin","shell","cmd","exec",
+  "flag","flag.txt","key","key.txt","secret.txt","password.txt","creds.txt",
+  ".well-known",".well-known/security.txt",".well-known/acme-challenge",
+  "manifest.json","sitemap","feed","rss","atom",
+];
+
+let fuzzerAbort = null;
+
+function statusColor(code) {
+  if (code >= 500) return "hc-5xx";
+  if (code >= 400) return "hc-4xx";
+  if (code >= 300) return "hc-3xx";
+  if (code >= 200) return "hc-2xx";
+  return "hc-0";
+}
+function fmtSize(n) {
+  if (!n) return "—";
+  if (n < 1024) return n + " Б";
+  return (n / 1024).toFixed(1) + " КБ";
+}
+function fmtMs(n) { return n < 1000 ? n + " мс" : (n/1000).toFixed(1) + " с"; }
+
+function renderHttpClient() {
+  tocEl.style.display = "none";
+  const tab = state.httpTab;
+  const tgt = state.target.trim();
+  const defaultUrl = tgt ? (parseTarget(tgt).url) : "";
+
+  const tabs = [
+    {id:"request", label:"HTTP Запрос"},
+    {id:"fuzzer",  label:"Сканер директорий"},
+  ];
+  const tabsHTML = tabs.map(t =>
+    `<button class="ref-tab ${t.id===tab?"active":""}" data-httptab="${t.id}">${t.label}</button>`
+  ).join("");
+
+  let body = "";
+  if (tab === "request") {
+    body = `
+      <div class="hc-form">
+        <div class="hc-url-row">
+          <select class="hc-method" id="hc-method">
+            ${["GET","POST","PUT","PATCH","DELETE","HEAD","OPTIONS"].map(m=>
+              `<option>${m}</option>`).join("")}
+          </select>
+          <input class="hc-url-input" id="hc-url" type="text"
+            placeholder="https://target.com/path"
+            value="${escapeHtml(defaultUrl)}" autocomplete="off" spellcheck="false">
+          <button class="btn-primary hc-send" id="hc-send">Отправить</button>
+        </div>
+
+        <details class="hc-details">
+          <summary>Заголовки <span class="hc-details-hint">(необязательно)</span></summary>
+          <div class="hc-headers-wrap">
+            <div class="hc-headers-list" id="hc-headers-list">
+              <div class="hc-header-row">
+                <input class="form-input hc-hk" placeholder="User-Agent" value="Mozilla/5.0 (CTF-Scanner)">
+                <span class="hc-colon">:</span>
+                <input class="form-input hc-hv" placeholder="значение" value="Mozilla/5.0 (CTF-Scanner)">
+                <button class="hc-hrow-del" title="Удалить">×</button>
+              </div>
+            </div>
+            <button class="btn-cancel" id="hc-add-header" style="margin-top:8px;font-size:12px">+ Заголовок</button>
+          </div>
+        </details>
+
+        <details class="hc-details" id="hc-body-details">
+          <summary>Тело запроса <span class="hc-details-hint">(POST/PUT/PATCH)</span></summary>
+          <textarea class="tool-textarea" id="hc-body" placeholder='{"key":"value"}' style="min-height:90px;margin-top:8px"></textarea>
+          <div class="hc-content-type">
+            Content-Type:
+            <button class="dec-mode-btn active" data-ct="application/json">JSON</button>
+            <button class="dec-mode-btn" data-ct="application/x-www-form-urlencoded">Form</button>
+            <button class="dec-mode-btn" data-ct="text/plain">Text</button>
+          </div>
+        </details>
+
+        <div id="hc-response" class="hc-response hidden"></div>
+      </div>`;
+  } else {
+    body = `
+      <div class="hc-form">
+        <div class="hc-url-row">
+          <input class="hc-url-input" id="fz-url" type="text"
+            placeholder="https://target.com"
+            value="${escapeHtml(defaultUrl)}" autocomplete="off" spellcheck="false">
+          <button class="btn-primary hc-send" id="fz-start">Запустить</button>
+          <button class="btn-cancel" id="fz-stop" style="display:none">Стоп</button>
+        </div>
+        <div class="fz-options">
+          <label class="fz-opt-label">Расширения:
+            <input class="form-input fz-opt-input" id="fz-exts" value="php,html,txt,bak" placeholder="php,html,txt" style="width:160px">
+          </label>
+          <label class="fz-opt-label">Коды ответа:
+            <input class="form-input fz-opt-input" id="fz-codes" value="200,201,204,301,302,307,401,403,405,500" style="width:220px">
+          </label>
+          <label class="fz-opt-label">Потоки:
+            <input class="form-input fz-opt-input" id="fz-threads" type="number" value="10" min="1" max="30" style="width:60px">
+          </label>
+          <label class="fz-opt-label">
+            <input type="checkbox" id="fz-custom-toggle"> Свой словарь
+          </label>
+        </div>
+        <textarea class="tool-textarea hidden" id="fz-custom-list"
+          placeholder="одна запись в строку:&#10;admin&#10;login&#10;secret.php&#10;..."
+          style="min-height:80px;margin-top:8px"></textarea>
+
+        <div class="fz-progress hidden" id="fz-progress">
+          <div class="fz-bar-wrap"><div class="fz-bar" id="fz-bar"></div></div>
+          <span id="fz-stat">0 / 0</span>
+        </div>
+
+        <div id="fz-results" class="fz-results hidden">
+          <div class="fz-results-head">
+            <span id="fz-found-count">0 найдено</span>
+            <button class="btn-cancel" id="fz-copy-results" style="font-size:11.5px">Скопировать список</button>
+          </div>
+          <table class="ref-table">
+            <thead><tr><th>Код</th><th>URL</th><th>Размер</th><th>Время</th></tr></thead>
+            <tbody id="fz-tbody"></tbody>
+          </table>
+        </div>
+      </div>`;
+  }
+
+  content.innerHTML = `
+    <div class="page-head" style="margin-bottom:24px">
+      <div class="page-eyebrow">Утилиты</div>
+      <h1 class="page-title">HTTP Клиент</h1>
+      <p class="page-desc">Отправляйте запросы и сканируйте директории прямо из браузера. Работает для локальных CTF-серверов и VPN-сетей. Для внешних сайтов может блокироваться CORS — смотри подсказку ниже.</p>
+    </div>
+    <div class="hc-cors-note">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+      <span><b>CORS:</b> если цель блокирует запросы из браузера — запустите Chrome с отключённым CORS:
+        <code>google-chrome --disable-web-security --user-data-dir=/tmp/ctf-chrome</code>
+        Или используйте локальный прокси.
+      </span>
+    </div>
+    <div class="ref-tabs" style="margin-bottom:20px">${tabsHTML}</div>
+    ${body}`;
+
+  // wire tabs
+  content.querySelectorAll("[data-httptab]").forEach(btn =>
+    btn.addEventListener("click", () => { state.httpTab = btn.dataset.httptab; render(); }));
+
+  if (tab === "request") wireHttpRequest();
+  else wireFuzzer();
+}
+
+/* ---- HTTP Request ---- */
+function wireHttpRequest() {
+  const sendBtn  = document.getElementById("hc-send");
+  const methodEl = document.getElementById("hc-method");
+  const urlEl    = document.getElementById("hc-url");
+  const bodyEl   = document.getElementById("hc-body");
+  const respEl   = document.getElementById("hc-response");
+  const hdrsEl   = document.getElementById("hc-headers-list");
+  let curCT      = "application/json";
+
+  // content-type buttons
+  content.querySelectorAll("[data-ct]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      content.querySelectorAll("[data-ct]").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      curCT = btn.dataset.ct;
+    });
+  });
+
+  // add header row
+  document.getElementById("hc-add-header")?.addEventListener("click", () => {
+    const row = document.createElement("div");
+    row.className = "hc-header-row";
+    row.innerHTML = `<input class="form-input hc-hk" placeholder="Заголовок">
+      <span class="hc-colon">:</span>
+      <input class="form-input hc-hv" placeholder="значение">
+      <button class="hc-hrow-del" title="Удалить">×</button>`;
+    row.querySelector(".hc-hrow-del").addEventListener("click", () => row.remove());
+    hdrsEl.appendChild(row);
+  });
+  hdrsEl.querySelectorAll(".hc-hrow-del").forEach(b => b.addEventListener("click", () => b.closest(".hc-header-row").remove()));
+
+  const doRequest = async () => {
+    const url    = urlEl.value.trim();
+    const method = methodEl.value;
+    if (!url) { urlEl.focus(); return; }
+
+    sendBtn.disabled = true;
+    sendBtn.textContent = "…";
+    respEl.innerHTML = `<div class="hc-loading">Отправляю ${method} ${escapeHtml(url)}</div>`;
+    respEl.classList.remove("hidden");
+
+    const headers = {};
+    hdrsEl.querySelectorAll(".hc-header-row").forEach(row => {
+      const k = row.querySelector(".hc-hk")?.value.trim();
+      const v = row.querySelector(".hc-hv")?.value.trim();
+      if (k && v) headers[k] = v;
+    });
+
+    const hasBody = ["POST","PUT","PATCH"].includes(method);
+    if (hasBody && !headers["Content-Type"]) headers["Content-Type"] = curCT;
+
+    const t0 = performance.now();
+    try {
+      const opts = { method, headers, signal: AbortSignal.timeout(15000) };
+      if (hasBody && bodyEl.value.trim()) opts.body = bodyEl.value;
+
+      const res  = await fetch(url, opts);
+      const ms   = Math.round(performance.now() - t0);
+      const blob = await res.blob();
+      const size = blob.size;
+      const text = await blob.text();
+
+      const resHdrs = [...res.headers.entries()].map(([k,v]) =>
+        `<tr><td class="ref-note" style="white-space:nowrap;color:var(--text-2)">${escapeHtml(k)}</td><td class="ref-note">${escapeHtml(v)}</td></tr>`
+      ).join("");
+
+      let bodyOut = "";
+      const ct = res.headers.get("content-type") || "";
+      if (ct.includes("json")) {
+        try { bodyOut = JSON.stringify(JSON.parse(text), null, 2); }
+        catch { bodyOut = text; }
+      } else {
+        bodyOut = text;
+      }
+
+      respEl.innerHTML = `
+        <div class="hc-resp-status">
+          <span class="hc-status-badge ${statusColor(res.status)}">${res.status} ${res.statusText}</span>
+          <span class="hc-resp-meta">${fmtMs(ms)}</span>
+          <span class="hc-resp-meta">${fmtSize(size)}</span>
+          <button class="btn-cancel hc-copy-resp" style="margin-left:auto;font-size:11.5px">Скопировать тело</button>
+        </div>
+        <details class="hc-details" open>
+          <summary>Заголовки ответа</summary>
+          <div class="ref-table-wrap" style="margin-top:8px">
+            <table class="ref-table"><tbody>${resHdrs}</tbody></table>
+          </div>
+        </details>
+        <details class="hc-details" open>
+          <summary>Тело ответа</summary>
+          <div class="tool-result" style="margin-top:8px">
+            <div class="tool-result-body"><pre id="hc-body-out" style="max-height:400px;overflow-y:auto">${escapeHtml(bodyOut.slice(0, 50000))}</pre></div>
+          </div>
+        </details>`;
+      respEl.querySelector(".hc-copy-resp")?.addEventListener("click", btn => copyText(bodyOut, btn));
+    } catch (e) {
+      const ms = Math.round(performance.now() - t0);
+      const isCors = e.message?.includes("CORS") || e.message?.includes("Failed to fetch") || e.name === "TypeError";
+      respEl.innerHTML = `
+        <div class="hc-resp-status">
+          <span class="hc-status-badge hc-5xx">${e.name}</span>
+          <span class="hc-resp-meta">${fmtMs(ms)}</span>
+        </div>
+        <div class="hc-error-body">
+          <b>${escapeHtml(e.message)}</b>
+          ${isCors ? `<p style="margin-top:8px;color:var(--text-3)">Вероятно CORS-блокировка. Запустите Chrome:
+            <code style="display:block;margin-top:6px;font-size:11px">google-chrome --disable-web-security --user-data-dir=/tmp/ctf-chrome http://localhost:8081</code></p>` : ""}
+        </div>`;
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = "Отправить";
+    }
+  };
+
+  sendBtn.addEventListener("click", doRequest);
+  urlEl.addEventListener("keydown", e => { if (e.key === "Enter") doRequest(); });
+}
+
+/* ---- Directory Fuzzer ---- */
+async function runFuzzer() {
+  const urlEl      = document.getElementById("fz-url");
+  const startBtn   = document.getElementById("fz-start");
+  const stopBtn    = document.getElementById("fz-stop");
+  const progressEl = document.getElementById("fz-progress");
+  const barEl      = document.getElementById("fz-bar");
+  const statEl     = document.getElementById("fz-stat");
+  const resultsEl  = document.getElementById("fz-results");
+  const tbody      = document.getElementById("fz-tbody");
+  const countEl    = document.getElementById("fz-found-count");
+
+  const base    = urlEl.value.trim().replace(/\/$/, "");
+  if (!base) { urlEl.focus(); return; }
+
+  const exts    = document.getElementById("fz-exts").value.trim().split(",").map(x=>x.trim()).filter(Boolean);
+  const okCodes = new Set(document.getElementById("fz-codes").value.split(",").map(x=>parseInt(x.trim())).filter(Boolean));
+  const threads = Math.min(30, Math.max(1, parseInt(document.getElementById("fz-threads").value)||10));
+  const customEl = document.getElementById("fz-custom-list");
+  const useCustom = document.getElementById("fz-custom-toggle").checked && customEl.value.trim();
+  const rawList = useCustom
+    ? customEl.value.trim().split("\n").map(s=>s.trim()).filter(Boolean)
+    : FUZZ_BUILTIN;
+
+  // expand with extensions
+  let wordlist = [];
+  for (const w of rawList) {
+    wordlist.push(w);
+    if (!w.includes(".")) {
+      for (const ext of exts) wordlist.push(`${w}.${ext}`);
+    }
+  }
+  wordlist = [...new Set(wordlist)];
+
+  startBtn.style.display = "none";
+  stopBtn.style.display  = "";
+  progressEl.classList.remove("hidden");
+  resultsEl.classList.remove("hidden");
+  tbody.innerHTML = "";
+  countEl.textContent = "0 найдено";
+
+  let done = 0, found = 0;
+  const total = wordlist.length;
+  const controller = new AbortController();
+  fuzzerAbort = () => controller.abort();
+
+  const processWord = async (word) => {
+    if (controller.signal.aborted) return;
+    const url = `${base}/${word}`;
+    const t0 = performance.now();
+    try {
+      const res = await fetch(url, {
+        method: "GET",
+        redirect: "manual",
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0 (CTF-Scanner)" }
+      });
+      const ms   = Math.round(performance.now() - t0);
+      const code = res.status || 0;
+      const sizeH = res.headers.get("content-length");
+
+      if (okCodes.has(code) || (code >= 200 && code < 400 && code !== 404)) {
+        found++;
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td><span class="hc-status-badge ${statusColor(code)}">${code}</span></td>
+          <td><a class="hc-result-url" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml("/"+word)}</a></td>
+          <td style="white-space:nowrap;color:var(--text-3);font-family:var(--mono);font-size:11px">${sizeH?fmtSize(+sizeH):"—"}</td>
+          <td style="white-space:nowrap;color:var(--text-3);font-family:var(--mono);font-size:11px">${fmtMs(ms)}</td>`;
+        tbody.appendChild(row);
+        countEl.textContent = `${found} найдено`;
+      }
+    } catch (e) {
+      if (e.name === "AbortError") return;
+    }
+    done++;
+    barEl.style.width = (done / total * 100) + "%";
+    statEl.textContent = `${done} / ${total}`;
+  };
+
+  // run in batches
+  for (let i = 0; i < wordlist.length; i += threads) {
+    if (controller.signal.aborted) break;
+    await Promise.all(wordlist.slice(i, i + threads).map(processWord));
+  }
+
+  startBtn.style.display = "";
+  stopBtn.style.display  = "none";
+  if (!controller.signal.aborted) {
+    statEl.textContent = `Готово: ${done} / ${total} — ${found} найдено`;
+  }
+}
+
+function wireFuzzer() {
+  document.getElementById("fz-start")?.addEventListener("click", runFuzzer);
+  document.getElementById("fz-stop")?.addEventListener("click", () => fuzzerAbort?.());
+  document.getElementById("fz-custom-toggle")?.addEventListener("change", e => {
+    document.getElementById("fz-custom-list").classList.toggle("hidden", !e.target.checked);
+  });
+  document.getElementById("fz-copy-results")?.addEventListener("click", btn => {
+    const rows = [...document.querySelectorAll("#fz-tbody tr")];
+    const text = rows.map(r => {
+      const code = r.cells[0]?.textContent.trim();
+      const url  = r.cells[1]?.textContent.trim();
+      return `${code}  ${url}`;
+    }).join("\n");
+    copyText(text, btn);
+  });
+  document.getElementById("fz-url")?.addEventListener("keydown", e => {
+    if (e.key === "Enter") runFuzzer();
+  });
 }
 
 /* ============================================================
