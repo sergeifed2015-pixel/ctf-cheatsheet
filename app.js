@@ -761,6 +761,16 @@ function renderHttpClient() {
             placeholder="https://target.com/path"
             value="${escapeHtml(defaultUrl)}" autocomplete="off" spellcheck="false">
           <button class="btn-primary hc-send" id="hc-send">Отправить</button>
+          <button class="proxy-toggle ${useProxy?"proxy-on":""}" id="hc-proxy-toggle" title="Маршрутизировать через proxy.py">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><path d="M17 7 7 17M7 7l10 10"/><circle cx="12" cy="12" r="10"/></svg>
+            Прокси
+          </button>
+        </div>
+        <div id="hc-proxy-hint" class="proxy-hint ${useProxy?"":"hidden"}">
+          ${useProxy
+            ? "Прокси активен ✓ — запросы идут через <code>proxy.py</code>"
+            : "Запустите в терминале: <code>python3 proxy.py</code>"}
+          &nbsp;·&nbsp;<a href="proxy.py" download style="color:var(--flag)">Скачать proxy.py</a>
         </div>
 
         <details class="hc-details">
@@ -845,9 +855,8 @@ function renderHttpClient() {
     </div>
     <div class="hc-cors-note">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-      <span><b>CORS:</b> если цель блокирует запросы из браузера — запустите Chrome с отключённым CORS:
-        <code>google-chrome --disable-web-security --user-data-dir=/tmp/ctf-chrome</code>
-        Или используйте локальный прокси.
+      <span><b>CORS:</b> если запрос не проходит — запустите прокси: <code>python3 proxy.py</code> и нажмите тумблер <b>«Прокси»</b>.
+        Или закройте все окна Chrome, затем: <code>google-chrome --disable-web-security --user-data-dir=/tmp/ctf-chrome http://localhost:8081</code>
       </span>
     </div>
     <div class="ref-tabs" style="margin-bottom:20px">${tabsHTML}</div>
@@ -863,6 +872,14 @@ function renderHttpClient() {
 
 /* ---- HTTP Request ---- */
 function wireHttpRequest() {
+  const proxyBtn  = document.getElementById("hc-proxy-toggle");
+  const proxyHint = document.getElementById("hc-proxy-hint");
+  proxyBtn?.addEventListener("click", () => {
+    useProxy = !useProxy;
+    proxyBtn.classList.toggle("proxy-on", useProxy);
+    proxyHint?.classList.toggle("hidden", !useProxy);
+  });
+
   const sendBtn  = document.getElementById("hc-send");
   const methodEl = document.getElementById("hc-method");
   const urlEl    = document.getElementById("hc-url");
@@ -900,75 +917,86 @@ function wireHttpRequest() {
 
     sendBtn.disabled = true;
     sendBtn.textContent = "…";
-    respEl.innerHTML = `<div class="hc-loading">Отправляю ${method} ${escapeHtml(url)}</div>`;
     respEl.classList.remove("hidden");
 
-    const headers = {};
+    // collect custom headers from form
+    const extraHeaders = {};
     hdrsEl.querySelectorAll(".hc-header-row").forEach(row => {
       const k = row.querySelector(".hc-hk")?.value.trim();
       const v = row.querySelector(".hc-hv")?.value.trim();
-      if (k && v) headers[k] = v;
+      if (k && v) extraHeaders[k] = v;
     });
-
     const hasBody = ["POST","PUT","PATCH"].includes(method);
-    if (hasBody && !headers["Content-Type"]) headers["Content-Type"] = curCT;
+    if (hasBody && !extraHeaders["Content-Type"]) extraHeaders["Content-Type"] = curCT;
 
     const t0 = performance.now();
     try {
-      const opts = { method, headers, signal: AbortSignal.timeout(15000) };
-      if (hasBody && bodyEl.value.trim()) opts.body = bodyEl.value;
+      let status, statusText, resHeaders = {}, bodyText = "", size = 0;
 
-      const res  = await fetch(url, opts);
-      const ms   = Math.round(performance.now() - t0);
-      const blob = await res.blob();
-      const size = blob.size;
-      const text = await blob.text();
+      if (useProxy) {
+        const proxyReq = `${PROXY_URL}/proxy?url=${encodeURIComponent(url)}`;
+        const r   = await fetch(proxyReq, { signal: AbortSignal.timeout(15000) });
+        const data = await r.json();
+        if (data.error && !data.status) throw new Error(data.error);
+        status     = data.status;
+        statusText = data.statusText || "";
+        resHeaders = data.headers || {};
+        bodyText   = data.body || "";
+        size       = data.size || 0;
+      } else {
+        const opts = { method, headers: extraHeaders, signal: AbortSignal.timeout(15000) };
+        if (hasBody && bodyEl?.value.trim()) opts.body = bodyEl.value;
+        const res  = await fetch(url, opts);
+        const blob = await res.blob();
+        status     = res.status;
+        statusText = res.statusText;
+        res.headers.forEach((v,k) => { resHeaders[k] = v; });
+        bodyText   = await blob.text();
+        size       = blob.size;
+      }
 
-      const resHdrs = [...res.headers.entries()].map(([k,v]) =>
+      const ms = Math.round(performance.now() - t0);
+      const ct = resHeaders["content-type"] || resHeaders["Content-Type"] || "";
+      let bodyOut = bodyText;
+      if (ct.includes("json")) try { bodyOut = JSON.stringify(JSON.parse(bodyText),null,2); } catch{}
+
+      const resHdrsHTML = Object.entries(resHeaders).map(([k,v]) =>
         `<tr><td class="ref-note" style="white-space:nowrap;color:var(--text-2)">${escapeHtml(k)}</td><td class="ref-note">${escapeHtml(v)}</td></tr>`
       ).join("");
 
-      let bodyOut = "";
-      const ct = res.headers.get("content-type") || "";
-      if (ct.includes("json")) {
-        try { bodyOut = JSON.stringify(JSON.parse(text), null, 2); }
-        catch { bodyOut = text; }
-      } else {
-        bodyOut = text;
-      }
-
       respEl.innerHTML = `
         <div class="hc-resp-status">
-          <span class="hc-status-badge ${statusColor(res.status)}">${res.status} ${res.statusText}</span>
+          <span class="hc-status-badge ${statusColor(status)}">${status} ${escapeHtml(statusText)}</span>
           <span class="hc-resp-meta">${fmtMs(ms)}</span>
           <span class="hc-resp-meta">${fmtSize(size)}</span>
+          ${useProxy?`<span class="hc-resp-meta" style="color:var(--flag)">via proxy</span>`:""}
           <button class="btn-cancel hc-copy-resp" style="margin-left:auto;font-size:11.5px">Скопировать тело</button>
         </div>
         <details class="hc-details" open>
           <summary>Заголовки ответа</summary>
           <div class="ref-table-wrap" style="margin-top:8px">
-            <table class="ref-table"><tbody>${resHdrs}</tbody></table>
+            <table class="ref-table"><tbody>${resHdrsHTML}</tbody></table>
           </div>
         </details>
         <details class="hc-details" open>
           <summary>Тело ответа</summary>
           <div class="tool-result" style="margin-top:8px">
-            <div class="tool-result-body"><pre id="hc-body-out" style="max-height:400px;overflow-y:auto">${escapeHtml(bodyOut.slice(0, 50000))}</pre></div>
+            <div class="tool-result-body"><pre style="max-height:420px;overflow-y:auto">${escapeHtml(bodyOut.slice(0,60000))}</pre></div>
           </div>
         </details>`;
-      respEl.querySelector(".hc-copy-resp")?.addEventListener("click", btn => copyText(bodyOut, btn));
-    } catch (e) {
+      respEl.querySelector(".hc-copy-resp")?.addEventListener("click", b => copyText(bodyOut, b));
+    } catch(e) {
       const ms = Math.round(performance.now() - t0);
-      const isCors = e.message?.includes("CORS") || e.message?.includes("Failed to fetch") || e.name === "TypeError";
+      const isCors = !useProxy && (e.name==="TypeError"||e.message?.includes("Failed"));
       respEl.innerHTML = `
         <div class="hc-resp-status">
-          <span class="hc-status-badge hc-5xx">${e.name}</span>
+          <span class="hc-status-badge hc-5xx">${escapeHtml(e.name)}</span>
           <span class="hc-resp-meta">${fmtMs(ms)}</span>
         </div>
         <div class="hc-error-body">
-          <b>${escapeHtml(e.message)}</b>
-          ${isCors ? `<p style="margin-top:8px;color:var(--text-3)">Вероятно CORS-блокировка. Запустите Chrome:
-            <code style="display:block;margin-top:6px;font-size:11px">google-chrome --disable-web-security --user-data-dir=/tmp/ctf-chrome http://localhost:8081</code></p>` : ""}
+          ${escapeHtml(e.message)}
+          ${isCors?`<div class="proxy-suggestion">Включите тумблер <b>«Прокси»</b> и запустите: <code>python3 proxy.py</code></div>`:""}
+          ${useProxy&&e.message?.includes("fetch")?`<div class="proxy-suggestion">Прокси не запущен: <code>python3 proxy.py</code></div>`:""}
         </div>`;
     } finally {
       sendBtn.disabled = false;
@@ -1990,6 +2018,15 @@ function quickScanPanel(catId) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
           Отправить
         </button>
+        <button class="proxy-toggle" id="qs-proxy-toggle" title="Использовать локальный прокси proxy.py">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><path d="M17 7 7 17M7 7l10 10"/><circle cx="12" cy="12" r="10"/></svg>
+          Прокси
+        </button>
+      </div>
+      <div id="qs-proxy-hint" class="proxy-hint ${useProxy ? "" : "hidden"}">
+        ${useProxy
+          ? "Прокси активен ✓ — запросы идут через <code>proxy.py</code>"
+          : "Запустите в терминале: <code>python3 proxy.py</code> — все запросы пойдут через него"}
       </div>
       <div id="qs-inline-resp" class="hc-response hidden" style="margin-top:10px"></div>
     </div>`;
@@ -2011,53 +2048,98 @@ function quickScanPanel(catId) {
     </details>`;
 }
 
+const PROXY_URL = "http://localhost:9876";
+let useProxy = false;
+
+async function detectProxy() {
+  try {
+    const r = await fetch(`${PROXY_URL}/proxy?url=`, { signal: AbortSignal.timeout(800) });
+    // any response (even 400) means proxy is running
+    useProxy = true;
+  } catch { /* proxy not running — stay false */ }
+}
+
 async function sendInlineRequest(urlVal, method, respEl, btn) {
   if (!urlVal) return;
   if (btn) { btn.disabled = true; }
   respEl.classList.remove("hidden");
-  respEl.innerHTML = `<div class="hc-loading">→ ${method} ${escapeHtml(urlVal)}</div>`;
+  respEl.innerHTML = `<div class="hc-loading">→ ${method} ${escapeHtml(urlVal)}${useProxy?" [прокси]":""}</div>`;
 
   const t0 = performance.now();
   try {
-    const res  = await fetch(urlVal, { method, redirect:"manual", signal: AbortSignal.timeout(12000), headers:{"User-Agent":"Mozilla/5.0 (CTF-Scanner)"} });
-    const ms   = Math.round(performance.now() - t0);
-    const text = method !== "HEAD" ? await res.text() : "";
-    const size = new Blob([text]).size;
+    let status, statusText, headers = {}, bodyText = "", size = 0;
 
-    const interestingHdrs = ["content-type","server","x-powered-by","location","set-cookie","x-frame-options","content-security-policy","www-authenticate"];
-    const hdrs = [...res.headers.entries()]
-      .filter(([k])=>interestingHdrs.includes(k.toLowerCase()))
-      .map(([k,v])=>`<span class="hc-h-key">${escapeHtml(k)}:</span> ${escapeHtml(v)}`)
+    if (useProxy) {
+      // route through local proxy.py
+      const proxyReq = `${PROXY_URL}/proxy?url=${encodeURIComponent(urlVal)}`;
+      const r   = await fetch(proxyReq, { method: "GET", signal: AbortSignal.timeout(15000) });
+      const data = await r.json();
+      if (data.error && !data.status) throw new Error(data.error);
+      status     = data.status;
+      statusText = data.statusText || "";
+      headers    = data.headers || {};
+      bodyText   = data.body || "";
+      size       = data.size || 0;
+    } else {
+      // direct fetch
+      const r  = await fetch(urlVal, {
+        method, redirect: "manual",
+        signal: AbortSignal.timeout(12000),
+        headers: { "User-Agent": "Mozilla/5.0 (CTF-Scanner)" }
+      });
+      status     = r.status;
+      statusText = r.statusText;
+      r.headers.forEach((v,k) => { headers[k] = v; });
+      bodyText   = method !== "HEAD" ? await r.text() : "";
+      size       = new Blob([bodyText]).size;
+    }
+
+    const ms = Math.round(performance.now() - t0);
+
+    const SHOW = ["content-type","server","x-powered-by","location","set-cookie",
+                  "x-frame-options","content-security-policy","www-authenticate","x-generator"];
+    const hdrsHTML = Object.entries(headers)
+      .filter(([k]) => SHOW.includes(k.toLowerCase()))
+      .map(([k,v]) => `<span class="hc-h-key">${escapeHtml(k)}:</span> ${escapeHtml(v)}`)
       .join("<br>");
 
     let preview = "";
-    if (text) {
-      const ct = res.headers.get("content-type")||"";
-      let body = text;
-      if (ct.includes("json")) try { body = JSON.stringify(JSON.parse(text),null,2); } catch{}
+    if (bodyText) {
+      let body = bodyText;
+      const ct = (headers["content-type"]||headers["Content-Type"]||"");
+      if (ct.includes("json")) try { body = JSON.stringify(JSON.parse(bodyText),null,2); } catch{}
       preview = `<div class="tool-result" style="margin-top:8px">
-        <div class="tool-result-body"><pre style="max-height:220px;overflow-y:auto">${escapeHtml(body.slice(0,8000))}</pre></div>
+        <div class="tool-result-body"><pre style="max-height:260px;overflow-y:auto">${escapeHtml(body.slice(0,10000))}</pre></div>
       </div>`;
     }
 
     respEl.innerHTML = `
       <div class="hc-resp-status">
-        <span class="hc-status-badge ${statusColor(res.status)}">${res.status} ${res.statusText}</span>
+        <span class="hc-status-badge ${statusColor(status)}">${status} ${escapeHtml(statusText)}</span>
         <span class="hc-resp-meta">${fmtMs(ms)}</span>
         ${size ? `<span class="hc-resp-meta">${fmtSize(size)}</span>` : ""}
+        ${useProxy ? `<span class="hc-resp-meta" style="color:var(--flag)">via proxy</span>` : ""}
       </div>
-      ${hdrs ? `<div class="qs-resp-hdrs">${hdrs}</div>` : ""}
+      ${hdrsHTML ? `<div class="qs-resp-hdrs">${hdrsHTML}</div>` : ""}
       ${preview}`;
   } catch(e) {
     const ms = Math.round(performance.now() - t0);
-    const isCors = e.name==="TypeError"||e.message?.includes("fetch");
+    const isCors = !useProxy && (e.name==="TypeError"||e.message?.includes("fetch")||e.message?.includes("Failed"));
     respEl.innerHTML = `
       <div class="hc-resp-status">
         <span class="hc-status-badge hc-5xx">${escapeHtml(e.name)}</span>
         <span class="hc-resp-meta">${fmtMs(ms)}</span>
       </div>
-      <div class="hc-error-body" style="font-size:12px">${escapeHtml(e.message)}
-        ${isCors?`<div style="margin-top:6px;color:var(--text-3)">CORS-блокировка? Запустите Chrome: <code style="font-size:10.5px;color:var(--flag)">google-chrome --disable-web-security --user-data-dir=/tmp/ctf-chrome</code></div>`:""}
+      <div class="hc-error-body" style="font-size:12px">
+        ${escapeHtml(e.message)}
+        ${isCors ? `<div class="proxy-suggestion">
+          CORS заблокировал запрос. Решение:<br>
+          1. Включите тумблер <b>«Прокси»</b> и запустите в терминале:<br>
+          <code>python3 proxy.py</code>
+        </div>` : ""}
+        ${useProxy && e.message?.includes("fetch") ? `<div class="proxy-suggestion">
+          Прокси не запущен. Выполните в терминале:<br><code>python3 proxy.py</code>
+        </div>` : ""}
       </div>`;
   } finally {
     if (btn) { btn.disabled = false; }
@@ -2069,10 +2151,21 @@ function wireQuickScan() {
     btn.addEventListener("click", () => copyText(btn.dataset.cmd, btn)));
 
   // inline client at top
-  const sendBtn  = document.getElementById("qs-send-btn");
-  const urlInput = document.getElementById("qs-url");
-  const respEl   = document.getElementById("qs-inline-resp");
-  const methodEl = document.getElementById("qs-method");
+  const sendBtn    = document.getElementById("qs-send-btn");
+  const urlInput   = document.getElementById("qs-url");
+  const respEl     = document.getElementById("qs-inline-resp");
+  const methodEl   = document.getElementById("qs-method");
+  const proxyToggle = document.getElementById("qs-proxy-toggle");
+  const proxyHint  = document.getElementById("qs-proxy-hint");
+
+  if (proxyToggle) {
+    proxyToggle.classList.toggle("proxy-on", useProxy);
+    proxyToggle.addEventListener("click", () => {
+      useProxy = !useProxy;
+      proxyToggle.classList.toggle("proxy-on", useProxy);
+      proxyHint?.classList.toggle("hidden", !useProxy);
+    });
+  }
 
   const doSend = () => sendInlineRequest(urlInput?.value.trim(), methodEl?.value||"GET", respEl, sendBtn);
   sendBtn?.addEventListener("click", doSend);
@@ -2283,7 +2376,7 @@ function wireProgChips(cat) {
 /* ============================================================
    Init
    ============================================================ */
-function init() {
+async function init() {
   setTheme(localStorage.getItem("ctf-theme") || "dark");
 
   // Target input
@@ -2351,6 +2444,7 @@ function init() {
   window.addEventListener("scroll", () => requestAnimationFrame(syncTOC), { passive: true });
   document.querySelector(".content")?.addEventListener("scroll", () => requestAnimationFrame(syncTOC), { passive: true });
 
+  await detectProxy();
   render();
 }
 
