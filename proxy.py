@@ -11,7 +11,7 @@ CTF Cheat Sheet — Local CORS Proxy
 
 Остановка: Ctrl+C
 """
-import sys, json, ssl, urllib.request, urllib.parse, urllib.error
+import sys, json, ssl, gzip, zlib, urllib.request, urllib.parse, urllib.error
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
 PORT = 9876
@@ -24,7 +24,7 @@ CTX = ssl.create_default_context()
 CTX.check_hostname = False
 CTX.verify_mode    = ssl.CERT_NONE
 
-SKIP_HEADERS = {"host", "content-length", "origin", "referer", "transfer-encoding"}
+SKIP_HEADERS = {"host", "content-length", "origin", "referer", "transfer-encoding", "accept-encoding"}
 
 class Proxy(BaseHTTPRequestHandler):
 
@@ -38,6 +38,24 @@ class Proxy(BaseHTTPRequestHandler):
 
     def do_OPTIONS(self):
         self.cors()
+
+    @staticmethod
+    def decompress(body, headers):
+        enc = headers.get("Content-Encoding", "").lower()
+        try:
+            if enc == "gzip":
+                return gzip.decompress(body)
+            if enc in ("deflate", "zlib"):
+                return zlib.decompress(body)
+        except Exception:
+            pass
+        # autodetect gzip magic bytes even without header
+        if body[:2] == b"\x1f\x8b":
+            try:
+                return gzip.decompress(body)
+            except Exception:
+                pass
+        return body
 
     def dispatch(self):
         # GET /proxy?url=http://target.com/path
@@ -63,20 +81,24 @@ class Proxy(BaseHTTPRequestHandler):
             if target.startswith("https"):
                 kw["context"] = CTX
             with urllib.request.urlopen(req, **kw) as r:
-                body    = r.read()
+                raw     = r.read()
+                hdrs    = dict(r.headers)
+                body    = self.decompress(raw, hdrs)
                 result  = {
                     "status":     r.status,
                     "statusText": r.reason,
-                    "headers":    dict(r.headers),
+                    "headers":    hdrs,
                     "body":       body.decode("utf-8", errors="replace"),
                     "size":       len(body),
                 }
         except urllib.error.HTTPError as e:
-            body   = e.read()
+            raw    = e.read()
+            hdrs   = dict(e.headers) if e.headers else {}
+            body   = self.decompress(raw, hdrs)
             result = {
                 "status":     e.code,
                 "statusText": e.reason,
-                "headers":    dict(e.headers) if e.headers else {},
+                "headers":    hdrs,
                 "body":       body.decode("utf-8", errors="replace"),
                 "size":       len(body),
             }
