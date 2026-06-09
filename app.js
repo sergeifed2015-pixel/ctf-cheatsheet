@@ -9,6 +9,7 @@ const state = {
   refTab: "ports",
   query: "",
   freq: "all",
+  target: "",     // current scan target — substituted into commands
 };
 
 const freqLabel = { high: "Часто", medium: "Иногда", low: "Редко" };
@@ -25,6 +26,62 @@ const toastWrap    = $("#toast-container");
 const sidebar      = $("#sidebar");
 const modalOverlay = $("#modal-overlay");
 const toolPopover  = $("#tool-popover");
+
+/* ============================================================
+   Target substitution
+   ============================================================ */
+const TARGET_KEY = "ctf-target";
+
+function parseTarget(raw) {
+  const t = raw.trim();
+  if (!t) return { url: "", host: "", domain: "", ip: "" };
+  const url    = /^https?:\/\//i.test(t) ? t.replace(/\/$/, "") : `http://${t}`;
+  const host   = url.replace(/^https?:\/\//i, "").split("/")[0];
+  const domain = host.replace(/:\d+$/, "");
+  return { url, host, domain, ip: domain };
+}
+
+function applyTarget(cmd) {
+  const t = state.target.trim();
+  if (!t) return cmd;
+  const { url, host, domain, ip } = parseTarget(t);
+  return cmd
+    .replace(/\[URL\]/g, url)
+    .replace(/\[url\]/g, url)
+    .replace(/\[хост\]/g, host)
+    .replace(/\[домен\]/g, domain)
+    .replace(/\[domain\]/g, domain)
+    .replace(/\[IP\]/g, ip)
+    .replace(/\[ip\]/g, ip)
+    .replace(/\[host\]/g, host)
+    .replace(/\[адрес\]/g, host)
+    .replace(/\[цель\]/g, host);
+}
+
+function setTarget(val) {
+  state.target = val;
+  localStorage.setItem(TARGET_KEY, val);
+  const clearBtn = document.getElementById("target-clear");
+  const wrap     = document.getElementById("target-wrap");
+  if (clearBtn) clearBtn.classList.toggle("hidden", !val.trim());
+  if (wrap)     wrap.classList.toggle("has-target", !!val.trim());
+}
+
+/* ---- recon commands for Quick Scan panel ---- */
+const RECON_CMDS = [
+  { tool:"dirsearch",    desc:"Перебор директорий и файлов",                cmd:"dirsearch -u [URL] -e php,html,js,txt,bak,zip -t 20 --random-agent" },
+  { tool:"ffuf",         desc:"Быстрый fuzzing директорий (SecLists)",       cmd:"ffuf -w /usr/share/wordlists/dirb/common.txt -u [URL]/FUZZ -mc 200,204,301,302,307,403" },
+  { tool:"gobuster",     desc:"Перебор директорий",                          cmd:"gobuster dir -u [URL] -w /usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt -x php,html,txt -t 40" },
+  { tool:"nikto",        desc:"Сканер уязвимостей и конфигурации",           cmd:"nikto -h [URL]" },
+  { tool:"sqlmap",       desc:"Автоматическая SQL-инъекция",                 cmd:"sqlmap -u \"[URL]\" --batch --dbs --random-agent" },
+  { tool:"nmap",         desc:"Сканирование портов и сервисов",              cmd:"nmap -sV -sC -T4 -p- [хост] -oN nmap_[хост].txt" },
+  { tool:"whatweb",      desc:"Технологии и CMS сервера",                    cmd:"whatweb -a 3 [URL]" },
+  { tool:"wfuzz vhost",  desc:"Поиск поддоменов (vhost fuzzing)",            cmd:"wfuzz -c -w /usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt -u [URL] -H \"Host: FUZZ.[домен]\" --hc 404,400" },
+  { tool:"curl headers", desc:"Заголовки HTTP-ответа сервера",               cmd:"curl -sI [URL]" },
+  { tool:"curl robots",  desc:"Robots.txt — скрытые пути",                  cmd:"curl -s [URL]/robots.txt" },
+  { tool:"feroxbuster",  desc:"Рекурсивный перебор директорий",              cmd:"feroxbuster -u [URL] -w /usr/share/wordlists/dirb/common.txt -x php,html,js" },
+  { tool:"wpscan",       desc:"Сканер уязвимостей WordPress",                cmd:"wpscan --url [URL] --enumerate u,p,t,cb,dbe" },
+];
 
 /* ============================================================
    Custom commands — localStorage
@@ -229,7 +286,7 @@ function commandHTML(cmd, { showCat }) {
             <span>Копировать</span>
           </button>
         </div>
-        <pre><code>${flagify(highlight(cmd.command, q))}</code></pre>
+        <pre><code>${flagify(highlight(applyTarget(cmd.command), q))}</code></pre>
       </div>
       ${explainHTML}
       ${outputHTML}
@@ -314,9 +371,10 @@ function renderCategory() {
     ? `<div class="commands">${cmds.map(c => commandHTML(c, { showCat: false })).join("")}</div>`
     : emptyHTML();
 
-  content.innerHTML = head + templateAccordion(cat.id) + analysisPanel(cat.id) + body;
+  content.innerHTML = head + quickScanPanel(cat.id) + templateAccordion(cat.id) + analysisPanel(cat.id) + body;
   wireCommon();
   wireProgChips(cat);
+  wireQuickScan();
   wireTemplates(cat.id);
   wireAnalysisPanel(cat.id);
   buildTOC(cmds);
@@ -391,7 +449,7 @@ function wireCommon() {
   content.querySelectorAll(".cmd").forEach((sec, i) => {
     const cmd = currentCmds[i];
     const btn = sec.querySelector(".copy-btn");
-    if (btn && cmd) btn.addEventListener("click", () => copyText(cmd.command, btn));
+    if (btn && cmd) btn.addEventListener("click", () => copyText(applyTarget(cmd.command), btn));
   });
   content.querySelectorAll(".cmd-anchor").forEach(a =>
     a.addEventListener("click", () => setTimeout(syncTOC, 60)));
@@ -1420,6 +1478,67 @@ function wireTemplates(catId) {
 }
 
 /* ============================================================
+   Quick Scan panel (Web category)
+   ============================================================ */
+function quickScanPanel(catId) {
+  if (catId !== "web") return "";
+  const t   = state.target.trim();
+  const { url, host } = parseTarget(t);
+
+  const targetBar = t
+    ? `<div class="qs-target-active">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
+        <span class="qs-target-val">${escapeHtml(url)}</span>
+        <span class="qs-target-hint">— команды заполнены целью</span>
+       </div>`
+    : `<div class="qs-no-target">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+        Укажите цель в поле сайдбара — команды заполнятся автоматически
+       </div>`;
+
+  const cards = RECON_CMDS.map(r => {
+    const cmd = applyTarget(r.cmd);
+    return `
+      <div class="qs-card">
+        <div class="qs-card-head">
+          <span class="qs-tool">${escapeHtml(r.tool)}</span>
+          <span class="qs-desc">${escapeHtml(r.desc)}</span>
+        </div>
+        <div class="code" style="margin:0;border-radius:0 0 var(--radius-sm) var(--radius-sm)">
+          <div class="code-bar" style="border-top:none">
+            <span class="label">shell</span>
+            <button class="copy-btn qs-copy" type="button" data-cmd="${escapeHtml(cmd)}">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <span>Копировать</span>
+            </button>
+          </div>
+          <pre><code class="${t ? "qs-filled" : ""}">${escapeHtml(cmd)}</code></pre>
+        </div>
+      </div>`;
+  }).join("");
+
+  return `
+    <details class="analysis-panel" id="qs-panel" open>
+      <summary class="analysis-summary">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
+        Быстрый реконнект
+        <svg class="analysis-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        <span class="analysis-badge">${t ? escapeHtml(host) : "цель не задана"}</span>
+      </summary>
+      <div class="analysis-body">
+        ${targetBar}
+        <div class="qs-grid">${cards}</div>
+      </div>
+    </details>`;
+}
+
+function wireQuickScan() {
+  document.querySelectorAll(".qs-copy").forEach(btn =>
+    btn.addEventListener("click", () => copyText(btn.dataset.cmd, btn))
+  );
+}
+
+/* ============================================================
    File Analysis Panel
    ============================================================ */
 function analysisPanel(catId) {
@@ -1603,6 +1722,27 @@ function wireProgChips(cat) {
    ============================================================ */
 function init() {
   setTheme(localStorage.getItem("ctf-theme") || "dark");
+
+  // Target input
+  const targetEl    = document.getElementById("target-input");
+  const targetClear = document.getElementById("target-clear");
+  const saved = localStorage.getItem(TARGET_KEY) || "";
+  if (saved) { targetEl.value = saved; setTarget(saved); }
+
+  targetEl.addEventListener("input", e => {
+    setTarget(e.target.value);
+    render();
+  });
+  targetEl.addEventListener("keydown", e => {
+    if (e.key === "Escape") { targetEl.blur(); }
+    if (e.key === "Enter")  { targetEl.blur(); openCategory("web"); }
+  });
+  targetClear.addEventListener("click", () => {
+    targetEl.value = "";
+    setTarget("");
+    render();
+    targetEl.focus();
+  });
   document.querySelectorAll(".theme-toggle button").forEach(b =>
     b.addEventListener("click", () => setTheme(b.dataset.theme)));
 
