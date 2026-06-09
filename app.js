@@ -1895,31 +1895,72 @@ function wireTemplates(catId) {
 }
 
 /* ============================================================
-   Quick Scan panel (Web category)
+   Quick Scan panel (Web category) — with inline HTTP client
    ============================================================ */
+
+// tools that can actually run via fetch (extract URL from command)
+const QS_RUNNABLE = {
+  "curl headers":  (url) => ({ method:"HEAD",  url }),
+  "curl robots":   (url) => ({ method:"GET",   url: url+"/robots.txt" }),
+  "whatweb":       (url) => ({ method:"GET",   url }),
+  "nmap":          null,  // CLI only
+  "dirsearch":     "fuzzer",
+  "ffuf":          "fuzzer",
+  "gobuster":      "fuzzer",
+  "feroxbuster":   "fuzzer",
+  "nikto":         null,
+  "sqlmap":        null,
+  "wfuzz vhost":   null,
+  "wpscan":        null,
+};
+
+function extractUrl(cmd) {
+  const m = cmd.match(/https?:\/\/[^\s"']+/);
+  return m ? m[0] : "";
+}
+
 function quickScanPanel(catId) {
   if (catId !== "web") return "";
   const t   = state.target.trim();
   const { url, host } = parseTarget(t);
 
-  const targetBar = t
+  const hint = t
     ? `<div class="qs-target-active">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
-        <span class="qs-target-val">${escapeHtml(url)}</span>
-        <span class="qs-target-hint">— команды заполнены целью</span>
+        <b>${escapeHtml(url)}</b>
+        <span style="color:var(--text-3);font-size:11.5px">— нажмите ▶ на команде чтобы отправить запрос</span>
        </div>`
     : `<div class="qs-no-target">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/></svg>
-        Укажите цель в поле сайдбара — команды заполнятся автоматически
+        Введите цель в поле сайдбара — команды заполнятся и можно будет отправлять запросы
        </div>`;
 
   const cards = RECON_CMDS.map(r => {
-    const cmd = applyTarget(r.cmd);
+    const cmd     = applyTarget(r.cmd);
+    const runType = QS_RUNNABLE[r.tool];
+    let runBtn = "";
+    if (runType === "fuzzer") {
+      runBtn = `<button class="qs-run-btn qs-to-fuzzer" data-url="${escapeHtml(url)}" title="Открыть в сканере директорий">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Сканер
+      </button>`;
+    } else if (runType !== null && runType !== undefined) {
+      const reqUrl = runType ? runType(url).url : extractUrl(cmd);
+      const method = runType ? runType(url).method : "GET";
+      runBtn = `<button class="qs-run-btn qs-send" data-url="${escapeHtml(reqUrl)}" data-method="${method}" title="Отправить запрос">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:11px;height:11px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+        Запрос
+      </button>`;
+    } else {
+      runBtn = `<span class="qs-cli-badge">CLI</span>`;
+    }
+
     return `
       <div class="qs-card">
         <div class="qs-card-head">
           <span class="qs-tool">${escapeHtml(r.tool)}</span>
           <span class="qs-desc">${escapeHtml(r.desc)}</span>
+          ${runBtn}
         </div>
         <div class="code" style="margin:0;border-radius:0 0 var(--radius-sm) var(--radius-sm)">
           <div class="code-bar" style="border-top:none">
@@ -1931,8 +1972,27 @@ function quickScanPanel(catId) {
           </div>
           <pre><code class="${t ? "qs-filled" : ""}">${escapeHtml(cmd)}</code></pre>
         </div>
+        <div class="qs-resp hidden"></div>
       </div>`;
   }).join("");
+
+  /* inline HTTP client at the top of the panel */
+  const inlineClient = `
+    <div class="qs-inline-client">
+      <div class="hc-url-row" style="gap:8px">
+        <select class="hc-method" id="qs-method">
+          ${["GET","POST","HEAD","OPTIONS"].map(m=>`<option>${m}</option>`).join("")}
+        </select>
+        <input class="hc-url-input" id="qs-url" type="text"
+          value="${escapeHtml(url)}" placeholder="https://target.com/path"
+          autocomplete="off" spellcheck="false">
+        <button class="btn-primary" id="qs-send-btn">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:13px;height:13px"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+          Отправить
+        </button>
+      </div>
+      <div id="qs-inline-resp" class="hc-response hidden" style="margin-top:10px"></div>
+    </div>`;
 
   return `
     <details class="analysis-panel" id="qs-panel" open>
@@ -1943,16 +2003,102 @@ function quickScanPanel(catId) {
         <span class="analysis-badge">${t ? escapeHtml(host) : "цель не задана"}</span>
       </summary>
       <div class="analysis-body">
-        ${targetBar}
+        ${hint}
+        ${inlineClient}
+        <div style="font-size:11.5px;color:var(--text-3);font-family:var(--mono);margin:16px 0 10px">КОМАНДЫ — нажмите ▶ для запроса, CLI-инструменты запускаются только в терминале</div>
         <div class="qs-grid">${cards}</div>
       </div>
     </details>`;
 }
 
+async function sendInlineRequest(urlVal, method, respEl, btn) {
+  if (!urlVal) return;
+  if (btn) { btn.disabled = true; }
+  respEl.classList.remove("hidden");
+  respEl.innerHTML = `<div class="hc-loading">→ ${method} ${escapeHtml(urlVal)}</div>`;
+
+  const t0 = performance.now();
+  try {
+    const res  = await fetch(urlVal, { method, redirect:"manual", signal: AbortSignal.timeout(12000), headers:{"User-Agent":"Mozilla/5.0 (CTF-Scanner)"} });
+    const ms   = Math.round(performance.now() - t0);
+    const text = method !== "HEAD" ? await res.text() : "";
+    const size = new Blob([text]).size;
+
+    const interestingHdrs = ["content-type","server","x-powered-by","location","set-cookie","x-frame-options","content-security-policy","www-authenticate"];
+    const hdrs = [...res.headers.entries()]
+      .filter(([k])=>interestingHdrs.includes(k.toLowerCase()))
+      .map(([k,v])=>`<span class="hc-h-key">${escapeHtml(k)}:</span> ${escapeHtml(v)}`)
+      .join("<br>");
+
+    let preview = "";
+    if (text) {
+      const ct = res.headers.get("content-type")||"";
+      let body = text;
+      if (ct.includes("json")) try { body = JSON.stringify(JSON.parse(text),null,2); } catch{}
+      preview = `<div class="tool-result" style="margin-top:8px">
+        <div class="tool-result-body"><pre style="max-height:220px;overflow-y:auto">${escapeHtml(body.slice(0,8000))}</pre></div>
+      </div>`;
+    }
+
+    respEl.innerHTML = `
+      <div class="hc-resp-status">
+        <span class="hc-status-badge ${statusColor(res.status)}">${res.status} ${res.statusText}</span>
+        <span class="hc-resp-meta">${fmtMs(ms)}</span>
+        ${size ? `<span class="hc-resp-meta">${fmtSize(size)}</span>` : ""}
+      </div>
+      ${hdrs ? `<div class="qs-resp-hdrs">${hdrs}</div>` : ""}
+      ${preview}`;
+  } catch(e) {
+    const ms = Math.round(performance.now() - t0);
+    const isCors = e.name==="TypeError"||e.message?.includes("fetch");
+    respEl.innerHTML = `
+      <div class="hc-resp-status">
+        <span class="hc-status-badge hc-5xx">${escapeHtml(e.name)}</span>
+        <span class="hc-resp-meta">${fmtMs(ms)}</span>
+      </div>
+      <div class="hc-error-body" style="font-size:12px">${escapeHtml(e.message)}
+        ${isCors?`<div style="margin-top:6px;color:var(--text-3)">CORS-блокировка? Запустите Chrome: <code style="font-size:10.5px;color:var(--flag)">google-chrome --disable-web-security --user-data-dir=/tmp/ctf-chrome</code></div>`:""}
+      </div>`;
+  } finally {
+    if (btn) { btn.disabled = false; }
+  }
+}
+
 function wireQuickScan() {
   document.querySelectorAll(".qs-copy").forEach(btn =>
-    btn.addEventListener("click", () => copyText(btn.dataset.cmd, btn))
-  );
+    btn.addEventListener("click", () => copyText(btn.dataset.cmd, btn)));
+
+  // inline client at top
+  const sendBtn  = document.getElementById("qs-send-btn");
+  const urlInput = document.getElementById("qs-url");
+  const respEl   = document.getElementById("qs-inline-resp");
+  const methodEl = document.getElementById("qs-method");
+
+  const doSend = () => sendInlineRequest(urlInput?.value.trim(), methodEl?.value||"GET", respEl, sendBtn);
+  sendBtn?.addEventListener("click", doSend);
+  urlInput?.addEventListener("keydown", e => { if(e.key==="Enter") doSend(); });
+
+  // ▶ Запрос buttons on individual cards
+  document.querySelectorAll(".qs-send").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const card    = btn.closest(".qs-card");
+      const cardResp = card.querySelector(".qs-resp");
+      cardResp.classList.remove("hidden");
+      await sendInlineRequest(btn.dataset.url, btn.dataset.method||"GET", cardResp, btn);
+    });
+  });
+
+  // ▶ Сканер buttons → open fuzzer tab pre-filled
+  document.querySelectorAll(".qs-to-fuzzer").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.httpTab = "fuzzer";
+      openHttpClient();
+      setTimeout(() => {
+        const u = document.getElementById("fz-url");
+        if (u) u.value = btn.dataset.url;
+      }, 300);
+    });
+  });
 }
 
 /* ============================================================

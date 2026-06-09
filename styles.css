@@ -382,6 +382,39 @@ body {
 .qs-card pre code { font-size: 11.5px; }
 .qs-filled { color: var(--flag) !important; }
 
+.qs-run-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-family: var(--mono); font-size: 11px; font-weight: 600;
+  padding: 3px 9px; border-radius: 5px; border: none; cursor: pointer;
+  margin-left: auto; flex-shrink: 0;
+  transition: opacity .15s;
+}
+.qs-run-btn:disabled { opacity: .5; cursor: wait; }
+.qs-send    { background: var(--flag-bg); color: var(--flag); }
+.qs-to-fuzzer { background: rgba(100,160,240,.12); color: #6fa0f0; }
+.qs-send:hover    { opacity: .8; }
+.qs-to-fuzzer:hover { opacity: .8; }
+.qs-cli-badge {
+  font-family: var(--mono); font-size: 10px;
+  padding: 2px 7px; border-radius: 4px; margin-left: auto;
+  background: var(--bg-soft); color: var(--text-faint);
+  border: 1px solid var(--border); flex-shrink: 0;
+}
+
+.qs-inline-client {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 4px;
+}
+.qs-resp { padding: 0 0 8px; }
+.qs-resp-hdrs {
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.7;
+  padding: 8px 12px; background: var(--bg-soft);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  color: var(--text-2); margin-top: 8px;
+}
+.hc-h-key { color: var(--text-3); }
+
 /* software chips */
 .software {
   margin-top: 22px;
